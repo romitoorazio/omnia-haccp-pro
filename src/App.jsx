@@ -3,6 +3,9 @@ import {
   AlertTriangle,
   Archive,
   Bell,
+  Boxes,
+  Bug,
+  Camera,
   CheckCircle2,
   ClipboardList,
   Database,
@@ -10,13 +13,18 @@ import {
   Factory,
   FileDown,
   FileText,
+  Flame,
+  Gauge,
   GraduationCap,
   Home,
+  Image,
   PackageCheck,
   Plus,
+  Printer,
   Search,
   Settings,
   ShieldCheck,
+  Snowflake,
   Sparkles,
   Thermometer,
   Trash2,
@@ -25,21 +33,21 @@ import {
   UserRound,
   Wrench,
   Droplets,
-  Bug,
-  Gauge,
-  Flame,
-  Snowflake,
-  Apple,
-  Boxes
+  Apple
 } from "lucide-react";
+import { auth, db, storage } from "./firebase";
+import { onAuthStateChanged } from "firebase/auth";
+import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
+import { getDownloadURL, ref as storageRef, uploadBytes } from "firebase/storage";
 import "./index.css";
 
-const STORAGE_KEY = "omnia_haccp_pro_v2";
+const STORAGE_KEY = "omnia_haccp_pro_v3";
+const OLD_KEYS = ["omnia_haccp_pro_v2", "omnia_haccp_pro_v1"];
 
 const moduliBase = [
   { id: "temperature", nome: "Temperature", icona: Thermometer, descrizione: "Frigo, celle, freezer, banco frigo" },
   { id: "pulizie", nome: "Pulizie", icona: Sparkles, descrizione: "Sanificazioni giornaliere e straordinarie" },
-  { id: "merci", nome: "Merci in entrata", icona: Truck, descrizione: "DDT, fornitori, lotti e scadenze" },
+  { id: "merci", nome: "Merci in entrata", icona: Truck, descrizione: "DDT, fatture, fornitori, lotti e scadenze" },
   { id: "oli", nome: "Oli esausti", icona: Droplets, descrizione: "FIR, litri smaltiti e ditta incaricata" },
   { id: "manutenzioni", nome: "Manutenzioni", icona: Wrench, descrizione: "Interventi tecnici e attrezzature" },
   { id: "formazione", nome: "Formazione", icona: GraduationCap, descrizione: "Attestati HACCP e corsi" },
@@ -52,20 +60,16 @@ const moduliBase = [
 ];
 
 const allergeniUE = [
-  "Glutine",
-  "Crostacei",
-  "Uova",
-  "Pesce",
-  "Arachidi",
-  "Soia",
-  "Latte",
-  "Frutta a guscio",
-  "Sedano",
-  "Senape",
-  "Sesamo",
-  "Solfiti",
-  "Lupini",
-  "Molluschi"
+  "Glutine", "Crostacei", "Uova", "Pesce", "Arachidi", "Soia", "Latte",
+  "Frutta a guscio", "Sedano", "Senape", "Sesamo", "Solfiti", "Lupini", "Molluschi"
+];
+
+const celleStandard = [
+  "Cella 1", "Cella 2", "Cella 3", "Cella 4", "Cella 5", "Cella 6", "Cella 7"
+];
+
+const pulizieStandard = [
+  "Cucina", "Sala", "Bagni", "Magazzino"
 ];
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -73,26 +77,6 @@ const today = () => new Date().toISOString().slice(0, 10);
 const uid = () => {
   if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
   return "id_" + Date.now() + "_" + Math.random().toString(16).slice(2);
-};
-
-const statoScadenza = (dataScadenza) => {
-  if (!dataScadenza) return "mancante";
-  const oggi = new Date();
-  oggi.setHours(0, 0, 0, 0);
-  const scad = new Date(dataScadenza);
-  scad.setHours(0, 0, 0, 0);
-  const giorni = Math.ceil((scad - oggi) / (1000 * 60 * 60 * 24));
-
-  if (giorni < 0) return "scaduto";
-  if (giorni <= 30) return "scadenza";
-  return "valido";
-};
-
-const statoLabel = {
-  valido: "Valido",
-  scadenza: "In scadenza",
-  scaduto: "Scaduto",
-  mancante: "Da completare"
 };
 
 const datiIniziali = () => ({
@@ -103,34 +87,162 @@ const datiIniziali = () => ({
     responsabile: "Orazio Romito"
   },
   staff: [
-    { id: uid(), nome: "Orazio Romito", ruolo: "Responsabile HACCP" }
+    { id: uid(), nome: "Orazio Romito", ruolo: "Responsabile HACCP" },
+    { id: uid(), nome: "AutoPilot", ruolo: "Sistema automatico" }
   ],
-  fornitori: [
-    { id: uid(), nome: "Fornitore esempio", categoria: "Alimenti", telefono: "", email: "", note: "" }
-  ],
-  prodotti: [
-    { id: uid(), nome: "Panino salsiccia", categoria: "Panineria", lotto: "", scadenza: "", allergeni: ["Glutine"], note: "" }
-  ],
-  attrezzature: [
-    { id: uid(), nome: "Cella 1", tipo: "Frigo", posizione: "Cucina", temperaturaMin: "0", temperaturaMax: "4", prossimaManutenzione: "" },
-    { id: uid(), nome: "Freezer", tipo: "Freezer", posizione: "Cucina", temperaturaMin: "-22", temperaturaMax: "-18", prossimaManutenzione: "" }
-  ],
+  fornitori: [],
+  prodotti: [],
+  attrezzature: celleStandard.map((nome, index) => ({
+    id: "cella_" + (index + 1),
+    nome,
+    tipo: "Frigo",
+    posizione: "Cucina",
+    temperaturaMin: "0",
+    temperaturaMax: "4",
+    prossimaManutenzione: ""
+  })),
   formazione: [],
   registrazioni: [],
   anomalie: [],
-  scadenze: []
+  scadenze: [],
+  documenti: []
 });
+
+function normalizzaDati(input) {
+  const base = datiIniziali();
+  const d = input || {};
+  const staff = Array.isArray(d.staff) ? d.staff : base.staff;
+
+  const haAutoPilot = staff.some(s => (s.nome || "").toLowerCase() === "autopilot");
+
+  return {
+    ...base,
+    ...d,
+    azienda: { ...base.azienda, ...(d.azienda || {}) },
+    staff: haAutoPilot ? staff : [...staff, { id: uid(), nome: "AutoPilot", ruolo: "Sistema automatico" }],
+    fornitori: Array.isArray(d.fornitori) ? d.fornitori : [],
+    prodotti: Array.isArray(d.prodotti) ? d.prodotti : [],
+    attrezzature: Array.isArray(d.attrezzature) && d.attrezzature.length ? d.attrezzature : base.attrezzature,
+    formazione: Array.isArray(d.formazione) ? d.formazione : [],
+    registrazioni: Array.isArray(d.registrazioni) ? d.registrazioni : [],
+    anomalie: Array.isArray(d.anomalie) ? d.anomalie : [],
+    scadenze: Array.isArray(d.scadenze) ? d.scadenze : [],
+    documenti: Array.isArray(d.documenti) ? d.documenti : []
+  };
+}
+
+function caricaLocale() {
+  const keys = [STORAGE_KEY, ...OLD_KEYS];
+  for (const k of keys) {
+    const raw = localStorage.getItem(k);
+    if (!raw) continue;
+    try {
+      return normalizzaDati(JSON.parse(raw));
+    } catch {
+      continue;
+    }
+  }
+  return datiIniziali();
+}
+
+function statoScadenza(dataScadenza) {
+  if (!dataScadenza) return "mancante";
+  const oggi = new Date();
+  oggi.setHours(0, 0, 0, 0);
+  const scad = new Date(dataScadenza);
+  scad.setHours(0, 0, 0, 0);
+  const giorni = Math.ceil((scad - oggi) / (1000 * 60 * 60 * 24));
+  if (giorni < 0) return "scaduto";
+  if (giorni <= 30) return "scadenza";
+  return "valido";
+}
+
+const statoLabel = {
+  valido: "Valido",
+  scadenza: "In scadenza",
+  scaduto: "Scaduto",
+  mancante: "Da completare"
+};
+
+function giorniDelMese(mese, anno, finoOggi = false) {
+  const last = new Date(Number(anno), Number(mese), 0).getDate();
+  const oggi = new Date();
+  const limite = finoOggi && oggi.getFullYear() === Number(anno) && oggi.getMonth() + 1 === Number(mese)
+    ? oggi.getDate()
+    : last;
+
+  const giorni = [];
+  for (let g = 1; g <= limite; g++) {
+    giorni.push(`${anno}-${String(mese).padStart(2, "0")}-${String(g).padStart(2, "0")}`);
+  }
+  return giorni;
+}
+
+function generaAutomatichePeriodo(dati, mese, anno, finoOggi = true) {
+  const out = normalizzaDati(dati);
+  const registrazioni = [...out.registrazioni];
+  const esistenti = new Set(registrazioni.map(r => r.autoKey).filter(Boolean));
+
+  giorniDelMese(mese, anno, finoOggi).forEach(data => {
+    celleStandard.forEach(cella => {
+      const key = `${data}|AUTO_TEMP|${cella}`;
+      if (!esistenti.has(key)) {
+        registrazioni.unshift({
+          id: uid(),
+          data,
+          ora: "06:00",
+          modulo: "temperature",
+          voce: cella,
+          dettaglio: "+4 °C",
+          esito: "CONFORME",
+          azione: "",
+          operatore: "AutoPilot",
+          automatico: true,
+          autoKey: key
+        });
+        esistenti.add(key);
+      }
+    });
+
+    pulizieStandard.forEach(area => {
+      const key = `${data}|AUTO_PULIZIA|${area}`;
+      if (!esistenti.has(key)) {
+        registrazioni.unshift({
+          id: uid(),
+          data,
+          ora: "07:00",
+          modulo: "pulizie",
+          voce: area,
+          dettaglio: "Pulizia e sanificazione standard",
+          esito: "CONFORME",
+          azione: "",
+          operatore: "AutoPilot",
+          automatico: true,
+          autoKey: key
+        });
+        esistenti.add(key);
+      }
+    });
+  });
+
+  return { ...out, registrazioni };
+}
+
+function generaAutomaticheOggi(dati) {
+  const now = new Date();
+  return generaAutomatichePeriodo(dati, String(now.getMonth() + 1), String(now.getFullYear()), true);
+}
 
 export default function App() {
   const [tab, setTab] = useState("dashboard");
+  const [sottoTab, setSottoTab] = useState("fornitori");
   const [moduloAttivo, setModuloAttivo] = useState("temperature");
   const [search, setSearch] = useState("");
-  const [sottoTab, setSottoTab] = useState("fornitori");
+  const [cloudLoaded, setCloudLoaded] = useState(false);
+  const [syncStatus, setSyncStatus] = useState("Avvio Firebase...");
+  const [uploadStatus, setUploadStatus] = useState("");
 
-  const [dati, setDati] = useState(() => {
-    const salvati = localStorage.getItem(STORAGE_KEY);
-    return salvati ? JSON.parse(salvati) : datiIniziali();
-  });
+  const [dati, setDati] = useState(() => generaAutomaticheOggi(caricaLocale()));
 
   const [formRegistro, setFormRegistro] = useState({
     modulo: "temperature",
@@ -148,6 +260,19 @@ export default function App() {
     scadenza: "",
     note: ""
   });
+
+  const [formDocumento, setFormDocumento] = useState({
+    tipo: "Fattura",
+    fornitore: "",
+    numero: "",
+    dataDocumento: today(),
+    importo: "",
+    controllo: "CONFORME",
+    note: "",
+    operatore: "Orazio Romito"
+  });
+
+  const [fileDocumento, setFileDocumento] = useState(null);
 
   const [formFornitore, setFormFornitore] = useState({
     nome: "",
@@ -183,9 +308,76 @@ export default function App() {
     note: ""
   });
 
+  const [stampa, setStampa] = useState({
+    mese: String(new Date().getMonth() + 1),
+    anno: String(new Date().getFullYear()),
+    tipo: "temperature"
+  });
+
+  useEffect(() => {
+    let alive = true;
+
+    const unsub = onAuthStateChanged(auth, async (user) => {
+      if (!user || !alive) return;
+
+      try {
+        setSyncStatus("Caricamento dati cloud...");
+        const refDb = doc(db, "aziende", "pizzaschetta", "database", "main");
+        const snap = await getDoc(refDb);
+
+        let payload = snap.exists() && snap.data()?.payload
+          ? snap.data().payload
+          : caricaLocale();
+
+        payload = generaAutomaticheOggi(normalizzaDati(payload));
+
+        if (alive) {
+          setDati(payload);
+          setCloudLoaded(true);
+          setSyncStatus("Firebase collegato");
+        }
+
+        await setDoc(refDb, {
+          payload,
+          updatedAt: serverTimestamp()
+        }, { merge: true });
+      } catch (error) {
+        console.error(error);
+        if (alive) {
+          setCloudLoaded(true);
+          setSyncStatus("Errore Firebase - uso locale");
+        }
+      }
+    });
+
+    return () => {
+      alive = false;
+      unsub();
+    };
+  }, []);
+
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(dati));
-  }, [dati]);
+
+    if (!cloudLoaded) return;
+
+    const timer = setTimeout(async () => {
+      try {
+        setSyncStatus("Salvataggio cloud...");
+        const refDb = doc(db, "aziende", "pizzaschetta", "database", "main");
+        await setDoc(refDb, {
+          payload: normalizzaDati(dati),
+          updatedAt: serverTimestamp()
+        }, { merge: true });
+        setSyncStatus("Sincronizzato");
+      } catch (error) {
+        console.error(error);
+        setSyncStatus("Errore salvataggio cloud");
+      }
+    }, 700);
+
+    return () => clearTimeout(timer);
+  }, [dati, cloudLoaded]);
 
   const ultimeFormazioniValide = useMemo(() => {
     const map = {};
@@ -200,7 +392,6 @@ export default function App() {
 
   const riepilogo = useMemo(() => {
     const anomalieAperte = dati.anomalie.filter(a => a.stato !== "CHIUSA").length;
-
     let scaduti = 0;
     let inScadenza = 0;
 
@@ -242,6 +433,7 @@ export default function App() {
       scaduti,
       inScadenza,
       registrazioniOggi: dati.registrazioni.filter(r => r.data === today()).length,
+      documenti: dati.documenti.length,
       fornitori: dati.fornitori.length,
       prodotti: dati.prodotti.length,
       attrezzature: dati.attrezzature.length
@@ -331,6 +523,92 @@ export default function App() {
     });
   };
 
+  const salvaDocumento = async (e) => {
+    e.preventDefault();
+
+    if (!fileDocumento) {
+      alert("Scatta o seleziona una foto/documento.");
+      return;
+    }
+
+    try {
+      setUploadStatus("Caricamento documento...");
+
+      const safeName = fileDocumento.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const path = `aziende/pizzaschetta/documenti/${formDocumento.tipo}/${Date.now()}_${safeName}`;
+      const refFile = storageRef(storage, path);
+
+      await uploadBytes(refFile, fileDocumento);
+      const url = await getDownloadURL(refFile);
+
+      const nuovoDocumento = {
+        id: uid(),
+        ...formDocumento,
+        fileName: fileDocumento.name,
+        fileType: fileDocumento.type,
+        url,
+        storagePath: path,
+        uploadedAt: today()
+      };
+
+      const modulo = moduloDaTipoDocumento(formDocumento.tipo);
+
+      const nuovaRegistrazione = {
+        id: uid(),
+        data: today(),
+        ora: new Date().toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" }),
+        modulo,
+        voce: formDocumento.fornitore || formDocumento.tipo,
+        dettaglio: `${formDocumento.tipo} ${formDocumento.numero ? "n. " + formDocumento.numero : ""} acquisita e controllata${formDocumento.importo ? " | Importo: " + formDocumento.importo : ""}`,
+        esito: formDocumento.controllo,
+        azione: formDocumento.controllo === "ANOMALIA" ? formDocumento.note : "",
+        operatore: formDocumento.operatore,
+        urlDocumento: url
+      };
+
+      setDati(prev => {
+        const anomalie = [...prev.anomalie];
+
+        if (formDocumento.controllo === "ANOMALIA") {
+          anomalie.unshift({
+            id: uid(),
+            data: today(),
+            modulo,
+            titolo: `${formDocumento.tipo} con anomalia`,
+            descrizione: formDocumento.note,
+            azione: formDocumento.note,
+            stato: "APERTA",
+            operatore: formDocumento.operatore
+          });
+        }
+
+        return {
+          ...prev,
+          documenti: [nuovoDocumento, ...prev.documenti],
+          registrazioni: [nuovaRegistrazione, ...prev.registrazioni],
+          anomalie
+        };
+      });
+
+      setFileDocumento(null);
+      setFormDocumento({
+        tipo: "Fattura",
+        fornitore: "",
+        numero: "",
+        dataDocumento: today(),
+        importo: "",
+        controllo: "CONFORME",
+        note: "",
+        operatore: "Orazio Romito"
+      });
+      setUploadStatus("✅ Documento salvato e controllo registrato");
+    } catch (error) {
+      console.error(error);
+      setUploadStatus("Errore caricamento documento");
+      alert("Errore nel caricamento. Controlla Storage Firebase e regole.");
+    }
+  };
+
   const salvaFornitore = (e) => {
     e.preventDefault();
     if (!formFornitore.nome.trim()) return alert("Inserisci nome fornitore.");
@@ -396,9 +674,8 @@ export default function App() {
     const reader = new FileReader();
     reader.onload = () => {
       try {
-        const json = JSON.parse(reader.result);
-        if (!json.registrazioni || !json.azienda) throw new Error("Formato non valido");
-        setDati(json);
+        const json = normalizzaDati(JSON.parse(reader.result));
+        setDati(generaAutomaticheOggi(json));
         alert("✅ Backup importato");
       } catch {
         alert("File backup non valido.");
@@ -420,10 +697,47 @@ export default function App() {
     scaricaFile(url, nome + ".csv");
   };
 
+  const completaAutomaticheMese = () => {
+    setDati(prev => generaAutomatichePeriodo(prev, stampa.mese, stampa.anno, true));
+    alert("✅ Registrazioni automatiche create per il mese selezionato");
+  };
+
+  const stampaMensile = () => {
+    const righe = dati.registrazioni
+      .filter(r => r.modulo === stampa.tipo)
+      .filter(r => {
+        const d = new Date(r.data);
+        return d.getMonth() + 1 === Number(stampa.mese) && d.getFullYear() === Number(stampa.anno);
+      })
+      .sort((a, b) => (a.data + a.voce).localeCompare(b.data + b.voce));
+
+    if (!righe.length) {
+      alert("Nessuna riga da stampare. Prima clicca 'Completa automatiche mese'.");
+      return;
+    }
+
+    const titolo = stampa.tipo === "temperature" ? "Registro Temperature" : "Registro Pulizie";
+    const html = generaHtmlStampa(titolo, dati.azienda, righe, stampa.mese, stampa.anno);
+
+    const w = window.open("", "_blank");
+    w.document.write(html);
+    w.document.close();
+    w.focus();
+    setTimeout(() => w.print(), 300);
+  };
+
   const moduliFiltrati = moduliBase.filter(m =>
     m.nome.toLowerCase().includes(search.toLowerCase()) ||
     m.descrizione.toLowerCase().includes(search.toLowerCase())
   );
+
+  const righePreviewStampa = dati.registrazioni
+    .filter(r => r.modulo === stampa.tipo)
+    .filter(r => {
+      const d = new Date(r.data);
+      return d.getMonth() + 1 === Number(stampa.mese) && d.getFullYear() === Number(stampa.anno);
+    })
+    .slice(0, 80);
 
   return (
     <div className="app">
@@ -432,13 +746,15 @@ export default function App() {
           <div className="brandIcon"><ShieldCheck size={28} /></div>
           <div>
             <h1>OMNIA</h1>
-            <p>HACCP PRO V2</p>
+            <p>HACCP PRO V3</p>
           </div>
         </div>
 
         <nav>
           <button onClick={() => setTab("dashboard")} className={tab === "dashboard" ? "active" : ""}><Home size={19} /> Dashboard</button>
           <button onClick={() => setTab("registri")} className={tab === "registri" ? "active" : ""}><ClipboardList size={19} /> Registri</button>
+          <button onClick={() => setTab("documenti")} className={tab === "documenti" ? "active" : ""}><Camera size={19} /> Documenti</button>
+          <button onClick={() => setTab("stampe")} className={tab === "stampe" ? "active" : ""}><Printer size={19} /> Stampe</button>
           <button onClick={() => setTab("formazione")} className={tab === "formazione" ? "active" : ""}><GraduationCap size={19} /> Formazione</button>
           <button onClick={() => setTab("anagrafiche")} className={tab === "anagrafiche" ? "active" : ""}><Database size={19} /> Anagrafiche</button>
           <button onClick={() => setTab("scadenze")} className={tab === "scadenze" ? "active" : ""}><Bell size={19} /> Scadenze</button>
@@ -452,12 +768,17 @@ export default function App() {
             {riepilogo.statoGenerale === "rosso" ? "Critico" : riepilogo.statoGenerale === "arancio" ? "Attenzione" : "Regolare"}
           </strong>
         </div>
+
+        <div className="syncBox">
+          <Database size={16} />
+          <span>{syncStatus}</span>
+        </div>
       </aside>
 
       <main className="content">
         {tab === "dashboard" && (
           <>
-            <Header titolo="Dashboard HACCP" sottotitolo="Controllo generale, scadenze, anomalie e registri" />
+            <Header titolo="Dashboard HACCP" sottotitolo="Controllo generale, scadenze, documenti e registri automatici" />
 
             <section className="hero">
               <div>
@@ -468,7 +789,7 @@ export default function App() {
                   {riepilogo.statoGenerale === "verde" && "Tutto regolare"}
                 </h2>
                 <p>
-                  La dashboard controlla anomalie aperte, formazione HACCP, prodotti, scadenze documentali e manutenzioni.
+                  Ogni apertura dell’app crea automaticamente le registrazioni standard di temperature e pulizie del mese corrente, senza duplicarle.
                 </p>
               </div>
               <div className={"bigLight " + riepilogo.statoGenerale}>
@@ -478,9 +799,9 @@ export default function App() {
 
             <section className="cards4">
               <StatCard label="Controlli oggi" value={riepilogo.registrazioniOggi} />
+              <StatCard label="Documenti" value={riepilogo.documenti} />
               <StatCard label="Anomalie aperte" value={riepilogo.anomalieAperte} danger={riepilogo.anomalieAperte > 0} />
               <StatCard label="Scaduti" value={riepilogo.scaduti} danger={riepilogo.scaduti > 0} />
-              <StatCard label="In scadenza" value={riepilogo.inScadenza} warning={riepilogo.inScadenza > 0} />
             </section>
 
             <section className="cards4">
@@ -517,7 +838,7 @@ export default function App() {
 
         {tab === "registri" && (
           <>
-            <Header titolo="Registri HACCP" sottotitolo="Registra controlli, conformità, anomalie e azioni correttive" />
+            <Header titolo="Registri HACCP" sottotitolo="Registrazioni automatiche e controlli manuali" />
 
             <section className="panel">
               <div className="tabs">
@@ -596,15 +917,172 @@ export default function App() {
               </div>
 
               <DataTable
-                columns={["Data", "Modulo", "Voce", "Dettaglio", "Esito", "Operatore", ""]}
-                rows={dati.registrazioni.slice(0, 60).map(r => [
-                  r.data + " " + r.ora,
+                columns={["Data", "Modulo", "Voce", "Dettaglio", "Esito", "Operatore", "Auto", ""]}
+                rows={dati.registrazioni.slice(0, 80).map(r => [
+                  r.data + " " + (r.ora || ""),
                   nomeModulo(r.modulo),
                   r.voce,
                   r.dettaglio || "-",
                   <Badge tipo={r.esito === "ANOMALIA" ? "danger" : "ok"}>{r.esito}</Badge>,
                   r.operatore,
+                  r.automatico ? "Sì" : "No",
                   <button className="iconBtn" onClick={() => eliminaDa("registrazioni", r.id)}><Trash2 size={16} /></button>
+                ])}
+              />
+            </section>
+          </>
+        )}
+
+        {tab === "documenti" && (
+          <>
+            <Header titolo="Foto documenti e fatture" sottotitolo="Scatta fatture, DDT, FIR, attestati e registra automaticamente il controllo" />
+
+            <section className="panel">
+              <form className="formGrid" onSubmit={salvaDocumento}>
+                <label>
+                  Tipo documento
+                  <select value={formDocumento.tipo} onChange={e => setFormDocumento(p => ({ ...p, tipo: e.target.value }))}>
+                    <option>Fattura</option>
+                    <option>DDT</option>
+                    <option>FIR olio esausto</option>
+                    <option>Attestato HACCP</option>
+                    <option>Rapporto tecnico</option>
+                    <option>Certificato disinfestazione</option>
+                    <option>Altro documento</option>
+                  </select>
+                </label>
+
+                <label>
+                  Fornitore / soggetto
+                  <input value={formDocumento.fornitore} onChange={e => setFormDocumento(p => ({ ...p, fornitore: e.target.value }))} list="fornitori-list" />
+                </label>
+
+                <label>
+                  Numero documento
+                  <input value={formDocumento.numero} onChange={e => setFormDocumento(p => ({ ...p, numero: e.target.value }))} placeholder="Numero fattura/DDT/FIR" />
+                </label>
+
+                <label>
+                  Data documento
+                  <input type="date" value={formDocumento.dataDocumento} onChange={e => setFormDocumento(p => ({ ...p, dataDocumento: e.target.value }))} />
+                </label>
+
+                <label>
+                  Importo
+                  <input value={formDocumento.importo} onChange={e => setFormDocumento(p => ({ ...p, importo: e.target.value }))} placeholder="Facoltativo" />
+                </label>
+
+                <label>
+                  Esito controllo
+                  <select value={formDocumento.controllo} onChange={e => setFormDocumento(p => ({ ...p, controllo: e.target.value }))}>
+                    <option value="CONFORME">✅ Conforme</option>
+                    <option value="ANOMALIA">❌ Anomalia</option>
+                  </select>
+                </label>
+
+                <label>
+                  Operatore
+                  <select value={formDocumento.operatore} onChange={e => setFormDocumento(p => ({ ...p, operatore: e.target.value }))}>
+                    {dati.staff.map(s => <option key={s.id} value={s.nome}>{s.nome}</option>)}
+                  </select>
+                </label>
+
+                <label>
+                  Foto / file
+                  <input type="file" accept="image/*,.pdf" capture="environment" onChange={e => setFileDocumento(e.target.files?.[0] || null)} />
+                </label>
+
+                <label className="full">
+                  Note controllo
+                  <input value={formDocumento.note} onChange={e => setFormDocumento(p => ({ ...p, note: e.target.value }))} placeholder="Es. documento leggibile, merce conforme, nessuna anomalia..." />
+                </label>
+
+                <button className="primary full" type="submit">
+                  <Camera size={18} /> Salva documento e registra controllo
+                </button>
+              </form>
+
+              {uploadStatus && <p className="uploadStatus">{uploadStatus}</p>}
+            </section>
+
+            <section className="panel">
+              <h3>Archivio documenti</h3>
+              <div className="docsGrid">
+                {dati.documenti.length === 0 && <div className="emptyBox">Nessun documento caricato</div>}
+                {dati.documenti.map(d => (
+                  <div className="docCard" key={d.id}>
+                    <div className="docIcon"><Image size={22} /></div>
+                    <div>
+                      <strong>{d.tipo}</strong>
+                      <span>{d.fornitore || "Senza fornitore"} — {d.numero || "senza numero"}</span>
+                      <small>{d.dataDocumento} · {d.controllo}</small>
+                    </div>
+                    <a href={d.url} target="_blank" rel="noreferrer">Apri</a>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </>
+        )}
+
+        {tab === "stampe" && (
+          <>
+            <Header titolo="Stampe mensili" sottotitolo="Genera registri mensili per timbro e firma" />
+
+            <section className="panel">
+              <div className="formGrid">
+                <label>
+                  Registro
+                  <select value={stampa.tipo} onChange={e => setStampa(p => ({ ...p, tipo: e.target.value }))}>
+                    <option value="temperature">Temperature</option>
+                    <option value="pulizie">Pulizie</option>
+                  </select>
+                </label>
+
+                <label>
+                  Mese
+                  <select value={stampa.mese} onChange={e => setStampa(p => ({ ...p, mese: e.target.value }))}>
+                    <option value="1">Gennaio</option>
+                    <option value="2">Febbraio</option>
+                    <option value="3">Marzo</option>
+                    <option value="4">Aprile</option>
+                    <option value="5">Maggio</option>
+                    <option value="6">Giugno</option>
+                    <option value="7">Luglio</option>
+                    <option value="8">Agosto</option>
+                    <option value="9">Settembre</option>
+                    <option value="10">Ottobre</option>
+                    <option value="11">Novembre</option>
+                    <option value="12">Dicembre</option>
+                  </select>
+                </label>
+
+                <label>
+                  Anno
+                  <input value={stampa.anno} onChange={e => setStampa(p => ({ ...p, anno: e.target.value }))} />
+                </label>
+
+                <div className="printActions full">
+                  <button className="secondary" type="button" onClick={completaAutomaticheMese}>
+                    <Database size={18} /> Completa automatiche mese
+                  </button>
+                  <button className="primary" type="button" onClick={stampaMensile}>
+                    <Printer size={18} /> Stampa registro mensile
+                  </button>
+                </div>
+              </div>
+            </section>
+
+            <section className="panel">
+              <h3>Anteprima righe da stampare</h3>
+              <DataTable
+                columns={["Data", "Voce", "Dettaglio", "Esito", "Operatore"]}
+                rows={righePreviewStampa.map(r => [
+                  r.data,
+                  r.voce,
+                  r.dettaglio,
+                  <Badge tipo={r.esito === "ANOMALIA" ? "danger" : "ok"}>{r.esito}</Badge>,
+                  r.operatore
                 ])}
               />
             </section>
@@ -881,14 +1359,6 @@ export default function App() {
                 <button className="secondary" onClick={() => esportaCSV("formazione-haccp", dati.formazione)}><FileDown size={18} /> Esporta formazione CSV</button>
               </div>
             </section>
-
-            <section className="panel muted">
-              <FileText size={22} />
-              <div>
-                <h3>Prossimo step V3</h3>
-                <p>Colleghiamo Firebase, GitHub e Vercel. Poi aggiungiamo foto DDT/FIR, allegati attestati, PDF professionali e importazione dati dalla vecchia app Google Sheet.</p>
-              </div>
-            </section>
           </>
         )}
 
@@ -922,7 +1392,7 @@ function Header({ titolo, sottotitolo }) {
       </div>
       <div className="headerCheck">
         <CheckCircle2 size={20} />
-        Sistema locale attivo
+        Sistema attivo
       </div>
     </header>
   );
@@ -983,6 +1453,7 @@ function StaffEditor({ dati, setDati }) {
           <option>Responsabile HACCP</option>
           <option>Admin</option>
           <option>Consulente</option>
+          <option>Sistema automatico</option>
         </select>
         <button className="primary" onClick={aggiungi}>Aggiungi</button>
       </div>
@@ -1047,6 +1518,14 @@ function placeholderDettaglio(modulo) {
   return map[modulo] || "Dettaglio";
 }
 
+function moduloDaTipoDocumento(tipo) {
+  if (tipo.includes("FIR")) return "oli";
+  if (tipo.includes("Attestato")) return "formazione";
+  if (tipo.includes("Rapporto")) return "manutenzioni";
+  if (tipo.includes("disinfestazione")) return "infestanti";
+  return "merci";
+}
+
 function scaricaFile(url, nome) {
   const a = document.createElement("a");
   a.href = url;
@@ -1055,4 +1534,83 @@ function scaricaFile(url, nome) {
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+function generaHtmlStampa(titolo, azienda, righe, mese, anno) {
+  const rows = righe.map(r => `
+    <tr>
+      <td>${formatDataIt(r.data)}</td>
+      <td>${escapeHtml(r.voce)}</td>
+      <td>${escapeHtml(r.dettaglio || "")}</td>
+      <td>${escapeHtml(r.esito || "")}</td>
+      <td>${escapeHtml(r.operatore || "")}</td>
+    </tr>
+  `).join("");
+
+  return `
+    <!doctype html>
+    <html>
+      <head>
+        <title>${titolo}</title>
+        <style>
+          @page { size: A4 landscape; margin: 10mm; }
+          body { font-family: Arial, sans-serif; color: #111; }
+          h1 { margin: 0; font-size: 22px; }
+          h2 { margin: 4px 0 12px; font-size: 16px; }
+          .head { border-bottom: 2px solid #111; padding-bottom: 8px; margin-bottom: 12px; }
+          .info { font-size: 12px; margin-top: 6px; }
+          table { width: 100%; border-collapse: collapse; font-size: 11px; }
+          th, td { border: 1px solid #111; padding: 6px; text-align: left; }
+          th { background: #eee; }
+          .firma { margin-top: 30px; display: flex; justify-content: space-between; gap: 30px; }
+          .box { width: 48%; border-top: 1px solid #111; padding-top: 8px; font-size: 12px; }
+        </style>
+      </head>
+      <body>
+        <div class="head">
+          <h1>${escapeHtml(azienda.nome || "Azienda")}</h1>
+          <h2>${escapeHtml(titolo)} - ${mese}/${anno}</h2>
+          <div class="info">
+            P.IVA: ${escapeHtml(azienda.piva || "-")} |
+            Sede: ${escapeHtml(azienda.sede || "-")} |
+            Responsabile HACCP: ${escapeHtml(azienda.responsabile || "-")}
+          </div>
+        </div>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Data</th>
+              <th>Voce</th>
+              <th>Dettaglio</th>
+              <th>Esito</th>
+              <th>Operatore</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+
+        <div class="firma">
+          <div class="box">Firma responsabile HACCP</div>
+          <div class="box">Timbro azienda</div>
+        </div>
+      </body>
+    </html>
+  `;
+}
+
+function formatDataIt(v) {
+  if (!v) return "";
+  const d = new Date(v);
+  if (isNaN(d)) return v;
+  return d.toLocaleDateString("it-IT");
+}
+
+function escapeHtml(v) {
+  return String(v ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }
