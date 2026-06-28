@@ -756,6 +756,140 @@ export default function App() {
     });
   };
 
+
+
+  const estraiLinkDrive = (testo) => {
+    const s = String(testo || "");
+    const m = s.match(/https:\/\/drive\.google\.com\/file\/d\/[^ \n\r"']+/i);
+    if (m) return m[0].replace(/[,;]+$/, "");
+    return "";
+  };
+
+  const importaDocumentiVecchiDrive = async (file) => {
+    if (!file) return;
+
+    try {
+      const text = await file.text();
+      const json = JSON.parse(text);
+
+      let lista = Array.isArray(json)
+        ? json
+        : Array.isArray(json.documenti)
+          ? json.documenti
+          : [];
+
+      // Se è il backup completo vecchio, i documenti sono dentro registrazioni/prodotti
+      if (!lista.length && Array.isArray(json.registrazioni)) {
+        lista = json.registrazioni
+          .filter(r => {
+            const link = estraiLinkDrive(r.allegato || r.urlDocumento || r.url || "");
+            return link && String(r.modulo || "").toLowerCase().includes("merci");
+          })
+          .map(r => ({
+            id: "drive_reg_" + (r.id || estraiLinkDrive(r.allegato)),
+            tipo: "Fattura / DDT merci",
+            fornitore: r.voce || "Archivio vecchio Google Drive",
+            numero: "",
+            dataDocumento: r.data || today(),
+            importo: "",
+            controllo: r.esito || "CONFORME",
+            note: r.dettaglio || "Documento importato dal vecchio registro merci",
+            operatore: r.operatore || "Orazio Romito",
+            fileName: "Documento merci Google Drive",
+            fileType: "drive",
+            url: estraiLinkDrive(r.allegato || r.urlDocumento || r.url || ""),
+            storagePath: estraiLinkDrive(r.allegato || r.urlDocumento || r.url || ""),
+            drive: true,
+            uploadedAt: r.data || today()
+          }));
+      }
+
+      // Recupero aggiuntivo dai prodotti vecchi con note "Allegato: link Drive"
+      if (Array.isArray(json.prodotti)) {
+        const daProdotti = json.prodotti
+          .filter(p => estraiLinkDrive(p.note || ""))
+          .map(p => ({
+            id: "drive_prod_" + (p.id || estraiLinkDrive(p.note)),
+            tipo: "Fattura / DDT prodotti",
+            fornitore: "Archivio vecchio Google Drive",
+            numero: "",
+            dataDocumento: today(),
+            importo: "",
+            controllo: "CONFORME",
+            note: p.nome + (p.lotto ? " | Lotto: " + p.lotto : ""),
+            operatore: "Orazio Romito",
+            fileName: "Allegato prodotto Google Drive",
+            fileType: "drive",
+            url: estraiLinkDrive(p.note || ""),
+            storagePath: estraiLinkDrive(p.note || ""),
+            drive: true,
+            uploadedAt: today()
+          }));
+
+        lista = [...lista, ...daProdotti];
+      }
+
+      if (!lista.length) {
+        alert("Nessun documento trovato nel file JSON. Questo file non contiene link Google Drive importabili.");
+        return;
+      }
+
+      let importati = 0;
+
+      setDati(prev => {
+        const attuali = Array.isArray(prev.documenti) ? prev.documenti : [];
+        const chiavi = new Set(
+          attuali.map(d => d.id || d.url || d.storagePath).filter(Boolean)
+        );
+
+        const nuovi = lista
+          .map((d, index) => {
+            const id = d.id || ("drive_old_" + index + "_" + Date.now());
+            return {
+              id,
+              tipo: d.tipo || "Fattura / DDT vecchio",
+              fornitore: d.fornitore || "Archivio vecchio Google Drive",
+              numero: d.numero || "",
+              dataDocumento: d.dataDocumento || d.data || today(),
+              importo: d.importo || "",
+              controllo: d.controllo || d.esito || "CONFORME",
+              note: d.note || "Documento importato dal vecchio archivio Google Drive",
+              operatore: d.operatore || "Orazio Romito",
+              fileName: d.fileName || d.nome || "Documento Google Drive",
+              fileType: d.fileType || "drive",
+              url: d.url || "",
+              storagePath: d.storagePath || "",
+              drive: true,
+              cloudinary: false,
+              uploadedAt: d.uploadedAt || today()
+            };
+          })
+          .filter(d => d.url)
+          .filter(d => {
+            const key = d.id || d.url || d.storagePath;
+            if (chiavi.has(key)) return false;
+            chiavi.add(key);
+            return true;
+          });
+
+        importati = nuovi.length;
+
+        return {
+          ...prev,
+          documenti: [...nuovi, ...attuali]
+        };
+      });
+
+      setTimeout(() => {
+        alert("✅ Importati " + importati + " documenti vecchi da Google Drive.");
+      }, 100);
+    } catch (error) {
+      console.error(error);
+      alert("Errore importazione documenti vecchi: " + (error?.message || error));
+    }
+  };
+
+
   const salvaDocumento = async (e) => {
     e.preventDefault();
 
@@ -976,7 +1110,7 @@ export default function App() {
           <div className="brandIcon"><ShieldCheck size={28} /></div>
           <div>
             <h1>OMNIA</h1>
-            <p>HACCP PRO V4.2</p>
+            <p>HACCP PRO V4.4.4.3</p>
           </div>
         </div>
 
@@ -1250,7 +1384,24 @@ export default function App() {
             </section>
 
             <section className="panel">
-              <h3>Archivio documenti</h3>
+              <h3>
+              <div className="oldImportBox">
+                <div>
+                  <strong>Importa vecchie fatture Google Drive</strong>
+                  <p>Seleziona il file documenti-vecchi-google-drive-import.json. Non cancella le fatture nuove.</p>
+                </div>
+                <label className="oldImportBtn">
+                  Importa JSON vecchio
+                  <input
+                    type="file"
+                    accept=".json,application/json"
+                    onChange={e => importaDocumentiVecchiDrive(e.target.files?.[0])}
+                    hidden
+                  />
+                </label>
+              </div>
+
+              Archivio documenti</h3>
               <div className="docsGrid">
                 {dati.documenti.length === 0 && <div className="emptyBox">Nessun documento caricato</div>}
                 {dati.documenti.map(d => (
