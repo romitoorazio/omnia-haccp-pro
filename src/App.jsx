@@ -64,12 +64,31 @@ const allergeniUE = [
   "Frutta a guscio", "Sedano", "Senape", "Sesamo", "Solfiti", "Lupini", "Molluschi"
 ];
 
-const celleStandard = [
-  "Cella 1", "Cella 2", "Cella 3", "Cella 4", "Cella 5", "Cella 6", "Cella 7"
+const attrezzatureStandard = [
+  { nome: "Cella 1", temp: "+4 °C", tipo: "Frigo", posizione: "Cucina", min: "0", max: "4" },
+  { nome: "Cella 2", temp: "+4 °C", tipo: "Frigo", posizione: "Cucina", min: "0", max: "4" },
+  { nome: "Cella 3", temp: "+4 °C", tipo: "Frigo", posizione: "Cucina", min: "0", max: "4" },
+  { nome: "Cella 4", temp: "+4 °C", tipo: "Frigo", posizione: "Cucina", min: "0", max: "4" },
+  { nome: "Cella 5", temp: "+4 °C", tipo: "Frigo", posizione: "Cucina", min: "0", max: "4" },
+  { nome: "Cella 6", temp: "+4 °C", tipo: "Frigo", posizione: "Cucina", min: "0", max: "4" },
+  { nome: "Cella 7", temp: "+4 °C", tipo: "Frigo", posizione: "Cucina", min: "0", max: "4" },
+  { nome: "Frigo 3", temp: "-18 °C", tipo: "Freezer", posizione: "Cucina", min: "-22", max: "-18" },
+  { nome: "Frigo 4", temp: "+4 °C", tipo: "Frigo", posizione: "Cucina", min: "0", max: "4" },
+  { nome: "Frigo 5", temp: "+4 °C", tipo: "Frigo", posizione: "Cucina", min: "0", max: "4" },
+  { nome: "Frigo 6", temp: "+4 °C", tipo: "Frigo", posizione: "Cucina", min: "0", max: "4" },
+  { nome: "Frigo 7", temp: "+4 °C", tipo: "Frigo", posizione: "Cucina", min: "0", max: "4" }
 ];
 
+const celleStandard = attrezzatureStandard.map(a => a.nome);
+
 const pulizieStandard = [
-  "Cucina", "Sala", "Bagni", "Magazzino"
+  "CUCINA",
+  "SALA",
+  "MAGAZZINO",
+  "BAGNI",
+  "TAVOLA CALDA",
+  "TAVOLA FREDDA",
+  "FRY TOP"
 ];
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -92,13 +111,13 @@ const datiIniziali = () => ({
   ],
   fornitori: [],
   prodotti: [],
-  attrezzature: celleStandard.map((nome, index) => ({
-    id: "cella_" + (index + 1),
-    nome,
-    tipo: "Frigo",
-    posizione: "Cucina",
-    temperaturaMin: "0",
-    temperaturaMax: "4",
+  attrezzature: attrezzatureStandard.map((a, index) => ({
+    id: "att_" + (index + 1),
+    nome: a.nome,
+    tipo: a.tipo,
+    posizione: a.posizione,
+    temperaturaMin: a.min,
+    temperaturaMax: a.max,
     prossimaManutenzione: ""
   })),
   formazione: [],
@@ -107,6 +126,40 @@ const datiIniziali = () => ({
   scadenze: [],
   documenti: []
 });
+
+function normVoce(v) {
+  return String(v || "").trim().toUpperCase().replace(/\s+/g, " ");
+}
+
+function sincronizzaAttrezzature(attrezzature) {
+  const out = [];
+  const viste = new Set();
+
+  (Array.isArray(attrezzature) ? attrezzature : []).forEach(a => {
+    if (!a || !a.nome) return;
+    const key = normVoce(a.nome);
+    if (viste.has(key)) return;
+    viste.add(key);
+    out.push(a);
+  });
+
+  attrezzatureStandard.forEach((a, index) => {
+    const key = normVoce(a.nome);
+    if (viste.has(key)) return;
+    viste.add(key);
+    out.push({
+      id: "att_pdf_" + (index + 1),
+      nome: a.nome,
+      tipo: a.tipo,
+      posizione: a.posizione,
+      temperaturaMin: a.min,
+      temperaturaMax: a.max,
+      prossimaManutenzione: ""
+    });
+  });
+
+  return out;
+}
 
 function normalizzaDati(input) {
   const base = datiIniziali();
@@ -122,7 +175,7 @@ function normalizzaDati(input) {
     staff: haAutoPilot ? staff : [...staff, { id: uid(), nome: "AutoPilot", ruolo: "Sistema automatico" }],
     fornitori: Array.isArray(d.fornitori) ? d.fornitori : [],
     prodotti: Array.isArray(d.prodotti) ? d.prodotti : [],
-    attrezzature: Array.isArray(d.attrezzature) && d.attrezzature.length ? d.attrezzature : base.attrezzature,
+    attrezzature: sincronizzaAttrezzature(Array.isArray(d.attrezzature) && d.attrezzature.length ? d.attrezzature : base.attrezzature),
     formazione: Array.isArray(d.formazione) ? d.formazione : [],
     registrazioni: Array.isArray(d.registrazioni) ? d.registrazioni : [],
     anomalie: Array.isArray(d.anomalie) ? d.anomalie : [],
@@ -181,46 +234,56 @@ function giorniDelMese(mese, anno, finoOggi = false) {
 function generaAutomatichePeriodo(dati, mese, anno, finoOggi = true) {
   const out = normalizzaDati(dati);
   const registrazioni = [...out.registrazioni];
-  const esistenti = new Set(registrazioni.map(r => r.autoKey).filter(Boolean));
+
+  const esistentiAuto = new Set(registrazioni.map(r => r.autoKey).filter(Boolean));
+  const esistentiVoce = new Set(
+    registrazioni.map(r => `${r.data}|${r.modulo}|${normVoce(r.voce)}`)
+  );
 
   giorniDelMese(mese, anno, finoOggi).forEach(data => {
-    celleStandard.forEach(cella => {
-      const key = `${data}|AUTO_TEMP|${cella}`;
-      if (!esistenti.has(key)) {
+    attrezzatureStandard.forEach(att => {
+      const key = `${data}|AUTO_TEMP|${att.nome}`;
+      const voceKey = `${data}|temperature|${normVoce(att.nome)}`;
+
+      if (!esistentiAuto.has(key) && !esistentiVoce.has(voceKey)) {
         registrazioni.unshift({
           id: uid(),
           data,
           ora: "06:00",
           modulo: "temperature",
-          voce: cella,
-          dettaglio: "+4 °C",
+          voce: att.nome,
+          dettaglio: att.temp,
           esito: "CONFORME",
           azione: "",
           operatore: "AutoPilot",
           automatico: true,
           autoKey: key
         });
-        esistenti.add(key);
+        esistentiAuto.add(key);
+        esistentiVoce.add(voceKey);
       }
     });
 
     pulizieStandard.forEach(area => {
       const key = `${data}|AUTO_PULIZIA|${area}`;
-      if (!esistenti.has(key)) {
+      const voceKey = `${data}|pulizie|${normVoce(area)}`;
+
+      if (!esistentiAuto.has(key) && !esistentiVoce.has(voceKey)) {
         registrazioni.unshift({
           id: uid(),
           data,
           ora: "07:00",
           modulo: "pulizie",
           voce: area,
-          dettaglio: "Pulizia e sanificazione standard",
+          dettaglio: "DISINFETTANTE",
           esito: "CONFORME",
           azione: "",
           operatore: "AutoPilot",
           automatico: true,
           autoKey: key
         });
-        esistenti.add(key);
+        esistentiAuto.add(key);
+        esistentiVoce.add(voceKey);
       }
     });
   });
@@ -232,6 +295,142 @@ function generaAutomaticheOggi(dati) {
   const now = new Date();
   return generaAutomatichePeriodo(dati, String(now.getMonth() + 1), String(now.getFullYear()), true);
 }
+
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function attendiUtenteFirebase(maxMs = 8000) {
+  const start = Date.now();
+
+  while (!auth.currentUser && Date.now() - start < maxMs) {
+    await sleep(150);
+  }
+
+  if (!auth.currentUser) {
+    throw new Error("Accesso Firebase non pronto. Ricarica la pagina e riprova.");
+  }
+
+  return auth.currentUser;
+}
+
+function conTimeout(promise, ms, messaggio) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      setTimeout(() => reject(new Error(messaggio)), ms);
+    })
+  ]);
+}
+
+async function comprimiImmagineSeServe(file) {
+  if (!file || !file.type || !file.type.startsWith("image/")) return file;
+
+  const dataUrl = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+
+  const img = await new Promise((resolve, reject) => {
+    const image = new window.Image();
+    image.onload = () => resolve(image);
+    image.onerror = reject;
+    image.src = dataUrl;
+  });
+
+  const maxSide = 1600;
+  const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(img.width * scale);
+  canvas.height = Math.round(img.height * scale);
+
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+  const blob = await new Promise(resolve => {
+    canvas.toBlob(resolve, "image/jpeg", 0.82);
+  });
+
+  if (!blob) return file;
+
+  const nuovoNome = file.name.replace(/\.[^.]+$/, "") + ".jpg";
+  return new File([blob], nuovoNome, { type: "image/jpeg" });
+}
+
+async function caricaFileStorage(file, cartella) {
+  await attendiUtenteFirebase();
+
+  const fileOk = await comprimiImmagineSeServe(file);
+  const safeName = fileOk.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+  const path = `aziende/pizzaschetta/${cartella}/${Date.now()}_${safeName}`;
+  const refFile = storageRef(storage, path);
+
+  await conTimeout(
+    uploadBytes(refFile, fileOk),
+    25000,
+    "Caricamento troppo lungo. Controlla Firebase Storage o la connessione."
+  );
+
+  const url = await conTimeout(
+    getDownloadURL(refFile),
+    12000,
+    "File caricato ma non riesco a prendere il link."
+  );
+
+  return {
+    fileName: fileOk.name,
+    fileType: fileOk.type,
+    url,
+    storagePath: path
+  };
+}
+
+
+
+async function caricaFileCloudinary(file, cartella) {
+  const fileOk = await comprimiImmagineSeServe(file);
+
+  const cloudName = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME || "dnpbz05pr";
+  const uploadPreset = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET || "omnia_haccp";
+
+  if (!cloudName || !uploadPreset) {
+    throw new Error("Cloudinary non configurato.");
+  }
+
+  const form = new FormData();
+  form.append("file", fileOk);
+  form.append("upload_preset", uploadPreset);
+  form.append("folder", "omnia-haccp-pro/" + cartella);
+
+  const response = await conTimeout(
+    fetch(`https://api.cloudinary.com/v1_1/${cloudName}/auto/upload`, {
+      method: "POST",
+      body: form
+    }),
+    120000,
+    "Caricamento troppo lungo verso Cloudinary."
+  );
+
+  const json = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(json?.error?.message || "Upload Cloudinary non riuscito.");
+  }
+
+  return {
+    fileName: fileOk.name,
+    fileType: fileOk.type,
+    url: json.secure_url,
+    storagePath: json.public_id || "",
+    cloudinary: true,
+    bytes: json.bytes || fileOk.size
+  };
+}
+
 
 export default function App() {
   const [tab, setTab] = useState("dashboard");
@@ -273,6 +472,7 @@ export default function App() {
   });
 
   const [fileDocumento, setFileDocumento] = useState(null);
+  const [fileRegistro, setFileRegistro] = useState(null);
 
   const [formFornitore, setFormFornitore] = useState({
     nome: "",
@@ -440,7 +640,7 @@ export default function App() {
     };
   }, [dati, ultimeFormazioniValide]);
 
-  const registraControllo = (e) => {
+  const registraControllo = async (e) => {
     e.preventDefault();
 
     if (!formRegistro.voce.trim()) {
@@ -453,11 +653,25 @@ export default function App() {
       return;
     }
 
+    let registroAllegato = null;
+
+    if (fileRegistro && formRegistro.modulo === "merci") {
+      try {
+        registroAllegato = await caricaFileStorage(fileRegistro, "merci");
+      } catch (error) {
+        console.error(error);
+        alert(error?.message || "Errore caricamento allegato merci. Controlla Firebase Storage.");
+        return;
+      }
+    }
+
     const nuova = {
       id: uid(),
       data: today(),
       ora: new Date().toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" }),
-      ...formRegistro
+      ...formRegistro,
+      urlDocumento: registroAllegato?.url || "",
+      fileName: registroAllegato?.fileName || ""
     };
 
     setDati(prev => {
@@ -476,9 +690,27 @@ export default function App() {
         });
       }
 
+      const documentiExtra = registroAllegato ? [{
+        id: uid(),
+        tipo: "Merci in entrata",
+        fornitore: formRegistro.voce,
+        numero: "",
+        dataDocumento: today(),
+        importo: "",
+        controllo: formRegistro.esito,
+        note: formRegistro.dettaglio,
+        operatore: formRegistro.operatore,
+        fileName: registroAllegato.fileName,
+        fileType: registroAllegato.fileType,
+        url: registroAllegato.url,
+        storagePath: registroAllegato.storagePath,
+        uploadedAt: today()
+      }] : [];
+
       return {
         ...prev,
         registrazioni: [nuova, ...prev.registrazioni],
+        documenti: [...documentiExtra, ...(prev.documenti || [])],
         anomalie
       };
     });
@@ -490,6 +722,7 @@ export default function App() {
       esito: "CONFORME",
       azione: ""
     }));
+    setFileRegistro(null);
 
     alert("✅ Controllo registrato");
   };
@@ -534,22 +767,19 @@ export default function App() {
     try {
       setUploadStatus("Caricamento documento...");
 
-      const safeName = fileDocumento.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-      const path = `aziende/pizzaschetta/documenti/${formDocumento.tipo}/${Date.now()}_${safeName}`;
-      const refFile = storageRef(storage, path);
-
-      await uploadBytes(refFile, fileDocumento);
-      const url = await getDownloadURL(refFile);
+      const caricato = await caricaFileCloudinary(fileDocumento, `documenti/${formDocumento.tipo}`);
 
       const nuovoDocumento = {
         id: uid(),
         ...formDocumento,
-        fileName: fileDocumento.name,
-        fileType: fileDocumento.type,
-        url,
-        storagePath: path,
+        fileName: caricato.fileName,
+        fileType: caricato.fileType,
+        url: caricato.url,
+        storagePath: caricato.storagePath,
         uploadedAt: today()
       };
+
+      const url = caricato.url;
 
       const modulo = moduloDaTipoDocumento(formDocumento.tipo);
 
@@ -604,8 +834,8 @@ export default function App() {
       setUploadStatus("✅ Documento salvato e controllo registrato");
     } catch (error) {
       console.error(error);
-      setUploadStatus("Errore caricamento documento");
-      alert("Errore nel caricamento. Controlla Storage Firebase e regole.");
+      setUploadStatus("❌ " + (error?.message || "Errore caricamento documento"));
+      alert(error?.message || "Errore nel caricamento. Controlla Storage Firebase e regole.");
     }
   };
 
@@ -746,7 +976,7 @@ export default function App() {
           <div className="brandIcon"><ShieldCheck size={28} /></div>
           <div>
             <h1>OMNIA</h1>
-            <p>HACCP PRO V3</p>
+            <p>HACCP PRO V4.2</p>
           </div>
         </div>
 
@@ -891,6 +1121,19 @@ export default function App() {
                   </select>
                 </label>
 
+                {moduloAttivo === "merci" && (
+                  <label className="full filePick">
+                    Foto / PDF merce in entrata
+                    <input
+                      type="file"
+                      accept="image/*,.pdf"
+                      capture="environment"
+                      onChange={e => setFileRegistro(e.target.files?.[0] || null)}
+                    />
+                    <span>{fileRegistro ? "Allegato selezionato: " + fileRegistro.name : "Puoi scattare foto o importare PDF/foto da archivio"}</span>
+                  </label>
+                )}
+
                 {formRegistro.esito === "ANOMALIA" && (
                   <label className="full">
                     Azione correttiva obbligatoria *
@@ -917,7 +1160,7 @@ export default function App() {
               </div>
 
               <DataTable
-                columns={["Data", "Modulo", "Voce", "Dettaglio", "Esito", "Operatore", "Auto", ""]}
+                columns={["Data", "Modulo", "Voce", "Dettaglio", "Esito", "Operatore", "Auto", "Allegato", ""]}
                 rows={dati.registrazioni.slice(0, 80).map(r => [
                   r.data + " " + (r.ora || ""),
                   nomeModulo(r.modulo),
@@ -926,6 +1169,7 @@ export default function App() {
                   <Badge tipo={r.esito === "ANOMALIA" ? "danger" : "ok"}>{r.esito}</Badge>,
                   r.operatore,
                   r.automatico ? "Sì" : "No",
+                  r.urlDocumento ? <a className="tableLink" href={r.urlDocumento} target="_blank" rel="noreferrer">Apri</a> : "-",
                   <button className="iconBtn" onClick={() => eliminaDa("registrazioni", r.id)}><Trash2 size={16} /></button>
                 ])}
               />
@@ -1011,7 +1255,11 @@ export default function App() {
                 {dati.documenti.length === 0 && <div className="emptyBox">Nessun documento caricato</div>}
                 {dati.documenti.map(d => (
                   <div className="docCard" key={d.id}>
+                    {d.fileType?.startsWith("image/") ? (
+                    <img className="docThumb" src={d.url} alt={d.tipo} />
+                  ) : (
                     <div className="docIcon"><Image size={22} /></div>
+                  )}
                     <div>
                       <strong>{d.tipo}</strong>
                       <span>{d.fornitore || "Senza fornitore"} — {d.numero || "senza numero"}</span>

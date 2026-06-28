@@ -697,3 +697,36 @@ td {
     display: grid;
   }
 }
+
+.filePick {
+  background: #f8fafc;
+  border: 1px dashed #93c5fd;
+  border-radius: 16px;
+  padding: 14px;
+}
+
+.filePick span {
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.tableLink {
+  display: inline-flex;
+  background: #dbeafe;
+  color: #1d4ed8;
+  text-decoration: none;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-weight: 1000;
+  font-size: 12px;
+}
+
+.docThumb {
+  width: 54px;
+  height: 54px;
+  border-radius: 16px;
+  object-fit: cover;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+}
