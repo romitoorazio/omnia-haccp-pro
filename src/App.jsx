@@ -341,7 +341,7 @@ async function comprimiImmagineSeServe(file) {
     image.src = dataUrl;
   });
 
-  const maxSide = 1600;
+  const maxSide = 1100;
   const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
 
   const canvas = document.createElement("canvas");
@@ -352,7 +352,7 @@ async function comprimiImmagineSeServe(file) {
   ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
   const blob = await new Promise(resolve => {
-    canvas.toBlob(resolve, "image/jpeg", 0.82);
+    canvas.toBlob(resolve, "image/jpeg", 0.68);
   });
 
   if (!blob) return file;
@@ -1110,7 +1110,7 @@ export default function App() {
           <div className="brandIcon"><ShieldCheck size={28} /></div>
           <div>
             <h1>OMNIA</h1>
-            <p>HACCP PRO V4.4.4.3</p>
+            <p>HACCP PRO V4.5.5.4.3</p>
           </div>
         </div>
 
@@ -1326,7 +1326,17 @@ export default function App() {
                     <option>Attestato HACCP</option>
                     <option>Rapporto tecnico</option>
                     <option>Certificato disinfestazione</option>
-                    <option>Altro documento</option>
+                    <option>Altro documento
+                    <option value="Manuale HACCP firmato">Manuale HACCP firmato</option>
+                    <option value="Planimetria locali">Planimetria locali</option>
+                    <option value="Scheda allergeni prodotti">Scheda allergeni prodotti</option>
+                    <option value="MOCA materiali contatto alimenti">MOCA materiali contatto alimenti</option>
+                    <option value="Scheda detergente / SDS">Scheda detergente / SDS</option>
+                    <option value="Piano infestanti / Disinfestazione">Piano infestanti / Disinfestazione</option>
+                    <option value="Taratura termometri">Taratura termometri</option>
+                    <option value="Procedura ritiro richiamo">Procedura ritiro richiamo</option>
+                    <option value="Manutenzione attrezzature">Manutenzione attrezzature</option>
+</option>
                   </select>
                 </label>
 
@@ -1385,6 +1395,128 @@ export default function App() {
 
             <section className="panel">
               <h3>
+              
+              {(() => {
+                const docs = Array.isArray(dati.documenti) ? dati.documenti : [];
+                const regs = Array.isArray(dati.registrazioni) ? dati.registrazioni : [];
+                const prodotti = Array.isArray(dati.prodotti) ? dati.prodotti : [];
+                const formazione = Array.isArray(dati.formazione) ? dati.formazione : [];
+
+                const testoDoc = d => [
+                  d.tipo,
+                  d.fornitore,
+                  d.numero,
+                  d.note,
+                  d.fileName
+                ].join(" ").toLowerCase();
+
+                const hasDoc = parole => docs.some(d => parole.some(p => testoDoc(d).includes(p)));
+                const hasReg = modulo => regs.some(r => String(r.modulo || "").toLowerCase().includes(modulo));
+                const hasAllergeniProdotti = prodotti.some(p => Array.isArray(p.allergeni) && p.allergeni.length > 0);
+
+                const richieste = [
+                  {
+                    titolo: "Manuale HACCP firmato",
+                    ok: hasDoc(["manuale haccp", "piano autocontrollo"]),
+                    nota: "Carica PDF firmato o foto del manuale."
+                  },
+                  {
+                    titolo: "Planimetria / locali",
+                    ok: hasDoc(["planimetria", "locali", "layout"]),
+                    nota: "Mappa locali, cucina, deposito, servizi."
+                  },
+                  {
+                    titolo: "Allergeni prodotto per prodotto",
+                    ok: hasDoc(["allergeni"]) || hasAllergeniProdotti,
+                    nota: "Schede allergeni per panini, arancini, focacce, pizze, impanate."
+                  },
+                  {
+                    titolo: "MOCA materiali a contatto alimenti",
+                    ok: hasDoc(["moca", "materiali contatto", "vassoi", "pellicola", "contenitori"]),
+                    nota: "Dichiarazioni per vaschette, carta, pellicola, contenitori."
+                  },
+                  {
+                    titolo: "Detergenti / schede sicurezza",
+                    ok: hasDoc(["detergente", "sds", "scheda sicurezza", "disinfettante"]),
+                    nota: "Schede tecniche o foto etichette prodotti pulizia."
+                  },
+                  {
+                    titolo: "Piano infestanti / disinfestazione",
+                    ok: hasDoc(["infestanti", "disinfestazione", "derattizzazione"]) || hasReg("infestanti"),
+                    nota: "Contratto/interventi ditta o monitoraggio interno."
+                  },
+                  {
+                    titolo: "Taratura termometri",
+                    ok: hasDoc(["taratura", "termometro"]) || hasReg("tarature"),
+                    nota: "Controllo periodico termometri."
+                  },
+                  {
+                    titolo: "Procedura ritiro / richiamo",
+                    ok: hasDoc(["ritiro", "richiamo", "prodotto non conforme"]),
+                    nota: "Procedura scritta per bloccare lotti non conformi."
+                  },
+                  {
+                    titolo: "Formazione HACCP",
+                    ok: formazione.length > 0 || hasDoc(["attestato haccp", "formazione"]),
+                    nota: "Attestati e scadenze operatori."
+                  },
+                  {
+                    titolo: "Temperature",
+                    ok: hasReg("temperature"),
+                    nota: "Celle/frighi/freezer registrati."
+                  },
+                  {
+                    titolo: "Pulizie",
+                    ok: hasReg("pulizie"),
+                    nota: "Cucina, sala, bagni, magazzino, tavoli, fry top."
+                  },
+                  {
+                    titolo: "Merci / fatture / DDT",
+                    ok: hasReg("merci") || hasDoc(["fattura", "ddt", "merci"]),
+                    nota: "Documenti ingresso merce con foto/PDF."
+                  },
+                  {
+                    titolo: "Oli esausti / FIR",
+                    ok: hasReg("oli") || hasDoc(["fir", "olio esausto", "oli esausti"]),
+                    nota: "Smaltimento oli e FIR."
+                  },
+                  {
+                    titolo: "Manutenzioni attrezzature",
+                    ok: hasReg("manutenzioni") || hasDoc(["manutenzione", "rapporto tecnico"]),
+                    nota: "Interventi su celle, frighi, fry top, forno, cappa, attrezzature."
+                  }
+                ];
+
+                const mancanti = richieste.filter(r => !r.ok).length;
+
+                return (
+                  <div className="inspectorBox checklistIspettoreHaccp">
+                    <div className="inspectorTop">
+                      <div>
+                        <h2>Checklist controllo ispettore</h2>
+                        <p>Qui vedi cosa hai già pronto e cosa manca da caricare.</p>
+                      </div>
+                      <div className={mancanti === 0 ? "checkBadge ok" : "checkBadge warn"}>
+                        {mancanti === 0 ? "Completa" : mancanti + " mancanti"}
+                      </div>
+                    </div>
+
+                    <div className="checkGrid">
+                      {richieste.map(item => (
+                        <div key={item.titolo} className={item.ok ? "checkItem done" : "checkItem missing"}>
+                          <strong>{item.ok ? "✅ " : "⚠️ "}{item.titolo}</strong>
+                          <span>{item.nota}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="phoneHint">
+                      <strong>Foto da telefono:</strong> apri il sito dal telefono, vai su Documenti o Merci in entrata, premi scegli file e scatta la foto. L’immagine viene ridotta prima del caricamento su Cloudinary.
+                    </div>
+                  </div>
+                );
+              })()}
+
               <div className="oldImportBox">
                 <div>
                   <strong>Importa vecchie fatture Google Drive</strong>
